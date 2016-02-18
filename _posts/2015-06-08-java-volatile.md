@@ -1,14 +1,10 @@
 ---
 layout:     post
 title:      Volatile笔记整理
-date:       201５-06-08 11:21:29
+date:       2015-06-09 11:21:29
 summary:    关于Java volatile使用和理解的一个总结
-categories: jekyll pixyll
+categories: java concurrency
 ---
-
-##Volatile笔记整理
-
-----------
 
 其实网上已经由很多对java volatile的深入解析，之前也细读过，但始终觉得比较凌乱，也许是脑子理解问题．这里把自己所理解的东西写出来，当是对volatile的一个总结．
 
