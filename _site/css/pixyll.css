@@ -94,9 +94,6 @@ strong, .bold {
 .right-align {
   text-align: right; }
 
-.measure {
-  max-width: 48rem; }
-
 .measure-narrow {
   max-width: 32rem; }
 
