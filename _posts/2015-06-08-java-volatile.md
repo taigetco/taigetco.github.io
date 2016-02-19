@@ -13,8 +13,9 @@ categories: java concurrency
 其实网上已经由很多对java volatile的深入解析，之前也细读过，但始终觉得比较凌乱，也许是脑子理解问题．这里把自己所理解的东西写出来，当是对volatile的一个总结．
 
 **Volatile在JMM里面定义两个语义**：
- - 不能重排
- - 保证data对所有线程可见
+
+* 不能重排
+* 保证data对所有线程可见
 
 **非线程安全**
 Volatile变量可以atomic read和atomic write, 但多个steps合在一起时，不是线程安全，比如read/modify/write, 也就是说volatile_var = volatile_var + 1线程不安全．
@@ -42,7 +43,8 @@ Volatile变量可以atomic read和atomic write, 但多个steps合在一起时，
 在此再详细说下LOCK操作，LOCK操作的数据不在cache line或则数据大小操作一个cache line的时候，此时LOCK操作同样会锁住系统总线，此时这是个performance hit 操作，当然发生的概率比较低．Volatile中的lock是不会发生以上两种情况的．在最新的处理器中，更新主存已经不是通过简单的CPU写回策略进行的了，而是处理器之间直接传送有效数据，由内存管理器负责主存的更新。
 
 **重排序**
-有两种重排序，compiler和cpu. 一下只讨论compiler的重排序．下面这个例子定义６个field, 用PrintAssembly查看JIT生成的汇编: 
+
+有两种，compiler和cpu. 以下只讨论compiler的重排序．下面这个例子定义６个field, 用PrintAssembly查看JIT生成的汇编: 
 
 ~~~java
 public class TestJIT
@@ -178,7 +180,7 @@ public class TestJIT
                                                 ; - java.util.concurrent.atomic.AtomicInteger::lazySet@8 (line 110)
                                                 ; - TestJIT::assign@40 (line 18)
 ~~~
-没有添加任何内存屏障(lock add, mfence), 只保证field1和field6的顺序，不会重排．
+没有添加任何内存屏障(lock add, mfence), 只保证field1和field6的顺序，不会重排，
 
 [1] http://stackoverflow.com/questions/7805192/is-a-volatile-int-in-java-thread-safe<br/>
 [2] http://codingcat.me/2015/05/09/big-brain-hole/<br/>
