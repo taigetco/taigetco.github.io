@@ -7,6 +7,56 @@
     <atom:link href="http://taigetco.github.io//feed.xml" rel="self" type="application/rss+xml" />
     
       <item>
+        <title>Spark RPC</title>
+        <description>&lt;p&gt;为什么会选择写Spark RPC，由于工作需要一直关注Spark的dev mail. Spark RPC的实现从之前依赖Akka Actor到抽象出统一的RPC interface, 最后现在基于netty自己开发，一直都觉得很好奇．&lt;/p&gt;
+
+&lt;h3 id=&quot;spark-rpc-interface&quot;&gt;统一的Spark RPC interface&lt;/h3&gt;
+
+&lt;p&gt;在Spark Core中依赖Akka，使得外围框架必需使用同一版本的Akka, 灵活性大大降低，抽象出Spark RPC interface，可以通过反射使用Akka, 避免对它的依赖，一旦有了统一的RPC interface, 可以使用其他不同的框架实现，如netty.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;类Actor的接口&lt;/strong&gt;&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;RpcAddress，一对host和post, 代表一个RpcEnv&lt;/li&gt;
+  &lt;li&gt;RpcEndpointAddress 包含一个RpcAddress和name, 表示在某个RpcEnv上的RpcEndpoint, name只保证在RpcEnv上的唯一性．&lt;/li&gt;
+  &lt;li&gt;RpcCallContext线程安全类，用在RpcEndpoint中的receiveAndReply中可以使RpcEndpoint异步处理消息发送reply&lt;/li&gt;
+  &lt;li&gt;RpcEndpoint 类似Actor, 根据消息触发不同功能，life-cycle: constructor -&amp;gt; onStart -&amp;gt; receive* -&amp;gt; onStop, receive可以并发调用，如果想让receive线程安全，使用ThreadSafeRpcEndpoint&lt;/li&gt;
+  &lt;li&gt;RpcEnv实现整个Rpc逻辑，注册RpcEndpoint, 管理RpcEndpoint和RpcEndpointRef, 负责分发数据到RpcEndpoint&lt;/li&gt;
+  &lt;li&gt;RpcEndpointRef是RpcEndpoint的远程引用，提供send/ask方法，向RpcEndpoint发送数据，简单点实际是一个客户端，只是标注要发往那个RpcEndpoint&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;strong&gt;和Actor的异同&lt;/strong&gt;&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;线程安全性：Actor是一个有状态，receive一次只能处理一条消息，不能并行执行．对于使用Actor实现Rpc interface, 不需要保证线程安全性，synchronize完全不需要，Akka已经保证．但这个设计也有不妥之处，假设一个事件RpcEndpoint需要处理很长时间，后续的消息延迟就会很高，响应变慢．通常处理办法都是开一个线程池来处理，对于RpcEndpoint的状态的更新又会牵涉到synchronize来保证线程安全性．&lt;/li&gt;
+  &lt;li&gt;在RpcEndpoint中添加方法&lt;code class=&quot;highlighter-rouge&quot;&gt;def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit]&lt;/code&gt;使异步处理消息成为可能, 从而使RpcEndpoint可以并行处理消息.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;  &lt;span class=&quot;k&quot;&gt;trait&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;RpcCallContext&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;reply&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;Any&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;Unit&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sendFailure&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;e&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;Throwable&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;Unit&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;senderAddress&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;RpcAddress&lt;/span&gt;
+  &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+&lt;ul&gt;
+  &lt;li&gt;异常处理，Actor中有SupervisorStrategy来负责异常处理，Non-fatal throwables会回传给sender, 由sender来判断处理逻辑．&lt;/li&gt;
+  &lt;li&gt;隔离事件处理逻辑，&lt;code class=&quot;highlighter-rouge&quot;&gt;RpcEndpointRef&lt;/code&gt;中&lt;code class=&quot;highlighter-rouge&quot;&gt;ask&lt;/code&gt;必须发送到&lt;code class=&quot;highlighter-rouge&quot;&gt;RpcEndpoint&lt;/code&gt;中的&lt;code class=&quot;highlighter-rouge&quot;&gt;receiveAndReply&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;send&lt;/code&gt;才会发送到&lt;code class=&quot;highlighter-rouge&quot;&gt;receive&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;netty&quot;&gt;Netty具体实现&lt;/h3&gt;
+
+&lt;p&gt;来看一下Akka里面是如何解决这一问题，而问什么在Spark中解决起来比较麻烦&lt;/p&gt;
+
+&lt;p&gt;来看一下Akka里面是如何解决这一问题，而问什么在Spark中解决起来比较麻烦&lt;/p&gt;
+
+</description>
+        <pubDate>Wed, 10 Feb 2016 05:21:36 +0800</pubDate>
+        <link>http://taigetco.github.io//spark/design/2016/02/10/spark-rpc/</link>
+        <guid isPermaLink="true">http://taigetco.github.io//spark/design/2016/02/10/spark-rpc/</guid>
+      </item>
+    
+      <item>
         <title>Volatile笔记整理</title>
         <description>&lt;p&gt;其实网上已经由很多对java volatile的深入解析，之前也细读过，但始终觉得比较凌乱，也许是脑子理解问题．这里把自己所理解的东西写出来，当是对volatile的一个总结．&lt;/p&gt;
 

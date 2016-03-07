@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Spark RPC &#8211; matthew's notes</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="关于Spark设计与实现">
+    <meta name="author" content="matthew yang">
+    <meta name="keywords" content="Spark, design">
+    <link rel="canonical" href="http://taigetco.github.io//spark/design/2016/02/10/spark-rpc/">
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/css/pixyll.css" type="text/css">
+
+    <!-- Fonts -->
+    <link href='//fonts.useso.com/css?family=Merriweather:900,900italic,300,300italic' rel='stylesheet' type='text/css'>
+    <link href='//fonts.useso.com/css?family=Lato:900,300' rel='stylesheet' type='text/css'>
+    
+
+    <!-- Open Graph -->
+    <!-- From: https://github.com/mmistakes/hpstr-jekyll-theme/blob/master/_includes/head.html -->
+    <meta property="og:locale" content="en_US">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Spark RPC">
+    <meta property="og:description" content="日常记录，技术笔记">
+    <meta property="og:url" content="http://taigetco.github.io//spark/design/2016/02/10/spark-rpc/">
+    <meta property="og:site_name" content="matthew's notes">
+    
+
+</head>
+
+<body class="">
+  <div class="site-wrap">
+    <header class="site-header px2 px-responsive">
+  <div class="mt2 wrap">
+    <div class="measure">
+      <a href="http://taigetco.github.io/" class="site-title">matthew's notes</a>
+      <nav class="site-nav right">
+        <a href="/about/">关于</a>
+<a href="/contact/">联系</a>
+
+      </nav>
+      <div class="clearfix"></div>
+      
+    </div>
+  </div>
+</header>
+
+
+    <div class="post p2 p-responsive wrap" role="main">
+      <div class="measure">
+        
+
+
+<div class="post-header mb2">
+  
+  <h1 class="py2">Spark RPC</h1>
+  
+  <span class="post-meta">02月 10日, 2016</span><br>
+  
+  <span class="post-meta small">1 minute read</span>
+</div>
+
+<article class="post-content">
+  <p>为什么会选择写Spark RPC，由于工作需要一直关注Spark的dev mail. Spark RPC的实现从之前依赖Akka Actor到抽象出统一的RPC interface, 最后现在基于netty自己开发，一直都觉得很好奇．</p>
+
+<h3 id="spark-rpc-interface">统一的Spark RPC interface</h3>
+
+<p>在Spark Core中依赖Akka，使得外围框架必需使用同一版本的Akka, 灵活性大大降低，抽象出Spark RPC interface，可以通过反射使用Akka, 避免对它的依赖，一旦有了统一的RPC interface, 可以使用其他不同的框架实现，如netty.</p>
+
+<p><strong>类Actor的接口</strong></p>
+
+<ul>
+  <li>RpcAddress，一对host和post, 代表一个RpcEnv</li>
+  <li>RpcEndpointAddress 包含一个RpcAddress和name, 表示在某个RpcEnv上的RpcEndpoint, name只保证在RpcEnv上的唯一性．</li>
+  <li>RpcCallContext线程安全类，用在RpcEndpoint中的receiveAndReply中可以使RpcEndpoint异步处理消息发送reply</li>
+  <li>RpcEndpoint 类似Actor, 根据消息触发不同功能，life-cycle: constructor -&gt; onStart -&gt; receive* -&gt; onStop, receive可以并发调用，如果想让receive线程安全，使用ThreadSafeRpcEndpoint</li>
+  <li>RpcEnv实现整个Rpc逻辑，注册RpcEndpoint, 管理RpcEndpoint和RpcEndpointRef, 负责分发数据到RpcEndpoint</li>
+  <li>RpcEndpointRef是RpcEndpoint的远程引用，提供send/ask方法，向RpcEndpoint发送数据，简单点实际是一个客户端，只是标注要发往那个RpcEndpoint</li>
+</ul>
+
+<p><strong>和Actor的异同</strong></p>
+
+<ul>
+  <li>线程安全性：Actor是一个有状态，receive一次只能处理一条消息，不能并行执行．对于使用Actor实现Rpc interface, 不需要保证线程安全性，synchronize完全不需要，Akka已经保证．但这个设计也有不妥之处，假设一个事件RpcEndpoint需要处理很长时间，后续的消息延迟就会很高，响应变慢．通常处理办法都是开一个线程池来处理，对于RpcEndpoint的状态的更新又会牵涉到synchronize来保证线程安全性．</li>
+  <li>在RpcEndpoint中添加方法<code class="highlighter-rouge">def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit]</code>使异步处理消息成为可能, 从而使RpcEndpoint可以并行处理消息.</li>
+</ul>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>  <span class="k">trait</span> <span class="nc">RpcCallContext</span> <span class="o">{</span>
+    <span class="k">def</span> <span class="n">reply</span><span class="o">(</span><span class="n">response</span><span class="k">:</span> <span class="kt">Any</span><span class="o">)</span><span class="k">:</span> <span class="kt">Unit</span>
+    <span class="k">def</span> <span class="n">sendFailure</span><span class="o">(</span><span class="n">e</span><span class="k">:</span> <span class="kt">Throwable</span><span class="o">)</span><span class="k">:</span> <span class="kt">Unit</span>
+    <span class="k">def</span> <span class="n">senderAddress</span><span class="k">:</span> <span class="kt">RpcAddress</span>
+  <span class="o">}</span>
+</code></pre>
+</div>
+<ul>
+  <li>异常处理，Actor中有SupervisorStrategy来负责异常处理，Non-fatal throwables会回传给sender, 由sender来判断处理逻辑．</li>
+  <li>隔离事件处理逻辑，<code class="highlighter-rouge">RpcEndpointRef</code>中<code class="highlighter-rouge">ask</code>必须发送到<code class="highlighter-rouge">RpcEndpoint</code>中的<code class="highlighter-rouge">receiveAndReply</code>, <code class="highlighter-rouge">send</code>才会发送到<code class="highlighter-rouge">receive</code></li>
+</ul>
+
+<h3 id="netty">Netty具体实现</h3>
+
+<p>来看一下Akka里面是如何解决这一问题，而问什么在Spark中解决起来比较麻烦</p>
+
+<p>来看一下Akka里面是如何解决这一问题，而问什么在Spark中解决起来比较麻烦</p>
+
+
+</article>
+
+
+
+
+
+		
+	
+
+      	
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+  <div class="p2 wrap">
+    <div class="measure mt1 center">
+      <small>
+        Pixyll crafted with &lt;3 by <a href="http://johnotander.com">John Otander</a> (<a href="https://twitter.com/4lpine">@4lpine</a>).<br>
+        &lt;/&gt; available on <a href="https://github.com/johnotander/pixyll">Github</a>.
+      </small>
+    </div>
+  </div>
+</footer>
+
+
+
+</body>
+</html>
