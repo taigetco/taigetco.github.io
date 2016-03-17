@@ -40,4 +40,5 @@ sass:
 kramdown:
   input: GFM
 # plugins
-gems:	 [jekyll-paginate]
+gems:	 [jekyll-paginate,jekyll-sitemap]
+
